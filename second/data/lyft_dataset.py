@@ -6,6 +6,7 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 import subprocess
+from multiprocessing import Pool
 
 import fire
 import numpy as np
@@ -45,6 +46,7 @@ class LyftDataset(Dataset):
         self._nusc_infos = list(sorted(self._nusc_infos, key=lambda e: e['timestamp']))
 
         self._with_velocity = False
+        self._cache_of_ground_truth_annotations = None
 
     def __len__(self):
         return len(self._nusc_infos)
@@ -130,26 +132,31 @@ class LyftDataset(Dataset):
 
     @property
     def ground_truth_annotations(self):
+
         if 'gt_boxes' not in self._nusc_infos[0]:
             return None
 
+        if self._cache_of_ground_truth_annotations is not None:
+            return self._cache_of_ground_truth_annotations
+
         gt_annos = []
         for info in self._nusc_infos:
-            for gt_box, gt_name in zip(info['gt_boxes'], info['gt_names']):
+            boxes = _info_to_nusc_box(info)
+            boxes = _lidar_nusc_box_to_global(info, boxes)
+
+            for i, box in enumerate(boxes):
                 gt_annos.append({
                     'sample_token': info['token'],
-                    'translation': gt_box[:3].tolist(),
-                    'size': gt_box[3:6].tolist(),
-                    'rotation': Quaternion(axis=[0, 0, 1],
-                                           radians=gt_box[6]).elements.tolist(),
-                    'name': gt_name
+                    'translation': box.center.tolist(),
+                    'size': box.wlh.tolist(),
+                    'rotation': box.orientation.elements.tolist(),
+                    'name': box.name
                 })
 
-        return gt_annos
+        self._cache_of_ground_truth_annotations = gt_annos
+        return self._cache_of_ground_truth_annotations
 
     def evaluation(self, detections, output_dir):
-        from lyft_dataset_sdk.eval.detection.mAP_evaluation import get_average_precisions
-
         gt_annos = self.ground_truth_annotations
         if gt_annos is None:
             return None
@@ -174,24 +181,31 @@ class LyftDataset(Dataset):
                 })
 
         iou_threshold = 0.5
-        average_precisions = get_average_precisions(gt_annos,
-                                                    predictions,
-                                                    self._class_names,
-                                                    iou_threshold)
+        average_precisions = _get_average_precisions(gt_annos,
+                                                     predictions,
+                                                     self._class_names,
+                                                     iou_threshold)
+
+        result = f"Lyft Evaluation\n"
+        detail = {}
 
         mAP = np.mean(average_precisions)
-        print('Average per class mean average precision = ', mAP)
 
-        for class_id in sorted(list(zip(self._class_names,
-                                        average_precisions.flatten().tolist()))):
-            print(class_id)
+        print('Average per class mean average precision = ', mAP)
+        result += f"Average per class mean average precision = {mAP}\n"
+        detail['mAP'] = mAP
+
+        for name, ap in zip(self._class_names, average_precisions.tolist()):
+            print(f"{name}: {ap}")
+            result += f"{name}: {ap}\n"
+            detail[name] = ap
 
         return {
             "results": {
-                "lyft": mAP
+                "lyft": result
             },
             "detail": {
-                "lyft": average_precisions
+                "lyft": detail
             },
         }
 
@@ -202,7 +216,9 @@ def _second_det_to_nusc_box(detection):
     box3d = detection["box3d_lidar"].detach().cpu().numpy()
     scores = detection["scores"].detach().cpu().numpy()
     labels = detection["label_preds"].detach().cpu().numpy()
+
     box3d[:, 6] = -box3d[:, 6] - np.pi / 2
+
     box_list = []
     for i in range(box3d.shape[0]):
         quat = Quaternion(axis=[0, 0, 1], radians=box3d[i, 6])
@@ -222,6 +238,27 @@ def _second_det_to_nusc_box(detection):
     return box_list
 
 
+def _info_to_nusc_box(info):
+    from lyft_dataset_sdk.utils.data_classes import Box
+
+    box3d = info['gt_boxes'].copy()
+    names = info['gt_names'].copy()
+
+    box3d[:, 6] = -box3d[:, 6] - np.pi / 2
+
+    box_list = []
+    for i in range(box3d.shape[0]):
+        quat = Quaternion(axis=[0, 0, 1], radians=box3d[i, 6])
+        velocity = (np.nan, np.nan, np.nan)
+        box = Box(box3d[i, :3],
+                  box3d[i, 3:6],
+                  quat,
+                  name=names[i],
+                  velocity=velocity)
+        box_list.append(box)
+    return box_list
+
+
 def _lidar_nusc_box_to_global(info, boxes):
     box_list = []
     for box in boxes:
@@ -235,6 +272,36 @@ def _lidar_nusc_box_to_global(info, boxes):
         box_list.append(box)
 
     return box_list
+
+
+def _get_average_precisions(gt: list,
+                            predictions: list,
+                            class_names: list,
+                            iou_threshold: float) -> np.array:
+    assert 0 <= iou_threshold <= 1
+
+    from lyft_dataset_sdk.eval.detection.mAP_evaluation import group_by_key
+    gt_by_class_name = group_by_key(gt, "name")
+    pred_by_class_name = group_by_key(predictions, "name")
+
+    pool = Pool(8)
+    pool_inputs = [(gt_by_class_name[name],
+                    pred_by_class_name[name],
+                    iou_threshold,
+                    name) for name in class_names if name in pred_by_class_name]
+    pool_results = pool.starmap(_recall_precision, pool_inputs)
+
+    average_precisions = np.zeros(len(class_names))
+    for class_name, average_precision in pool_results:
+        average_precisions[class_names.index(class_name)] = average_precision
+
+    return average_precisions
+
+
+def _recall_precision(gt, pred, th, class_name):
+    from lyft_dataset_sdk.eval.detection.mAP_evaluation import recall_precision
+    recalls, precisions, average_precision = recall_precision(gt, pred, th)
+    return class_name, average_precision
 
 
 def _fill_trainval_infos(lyft_ds,
