@@ -157,9 +157,6 @@ class LyftDataset(Dataset):
         return self._cache_of_ground_truth_annotations
 
     def evaluation(self, detections, output_dir):
-        gt_annos = self.ground_truth_annotations
-        if gt_annos is None:
-            return None
 
         token2info = {}
         for info in self._nusc_infos:
@@ -179,6 +176,12 @@ class LyftDataset(Dataset):
                     'name': self._class_names[box.label],
                     'score': box.score
                 })
+
+        gt_annos = self.ground_truth_annotations
+        if gt_annos is None:
+            with open(output_dir + "/result_global_coor.pkl", 'wb') as f:
+                pickle.dump(predictions, f)
+            return None
 
         iou_threshold = 0.5
         average_precisions = _get_average_precisions(gt_annos,
@@ -213,9 +216,9 @@ class LyftDataset(Dataset):
 def _second_det_to_nusc_box(detection):
     from lyft_dataset_sdk.utils.data_classes import Box
 
-    box3d = detection["box3d_lidar"].detach().cpu().numpy()
-    scores = detection["scores"].detach().cpu().numpy()
-    labels = detection["label_preds"].detach().cpu().numpy()
+    box3d = detection["box3d_lidar"].cpu().numpy()
+    scores = detection["scores"].cpu().numpy()
+    labels = detection["label_preds"].cpu().numpy()
 
     box3d[:, 6] = -box3d[:, 6] - np.pi / 2
 
