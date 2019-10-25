@@ -288,10 +288,13 @@ def _get_average_precisions(gt: list,
     pred_by_class_name = group_by_key(predictions, "name")
 
     pool = Pool(8)
-    pool_inputs = [(gt_by_class_name[name],
-                    pred_by_class_name[name],
-                    iou_threshold,
-                    name) for name in class_names if name in pred_by_class_name]
+    pool_inputs = []
+    for name in class_names:
+        if name in gt_by_class_name and name in pred_by_class_name:
+            pool_inputs.append((gt_by_class_name[name],
+                                pred_by_class_name[name],
+                                iou_threshold,
+                                name))
     pool_results = pool.starmap(_recall_precision, pool_inputs)
 
     average_precisions = np.zeros(len(class_names))
