@@ -106,6 +106,26 @@ def get_pointcloud():
         rots = np.concatenate([np.zeros([gt_boxes.shape[0], 2], dtype=np.float32), -gt_boxes[:, 6:7]], axis=1)
         response["rots"] = rots.tolist()
         response["labels"] = annos["names"].tolist()
+
+    if BACKEND.dt_annos is not None:
+        token = sensor_data['metadata']['token']
+        dt_anno = None
+        for _dt_anno in BACKEND.dt_annos:
+            if _dt_anno['metadata']['token'] == token:
+                dt_anno = _dt_anno
+                break
+        if dt_anno is not None:
+            box3d = dt_anno["box3d_lidar"].detach().cpu().numpy()
+            locs = box3d[:, :3]
+            dims = box3d[:, 3:6]
+            rots = np.concatenate([np.zeros([locs.shape[0], 2], dtype=np.float32), -box3d[:, 6:7]], axis=1)
+
+            response["dt_locs"] = locs.tolist()
+            response["dt_dims"] = dims.tolist()
+            response["dt_rots"] = rots.tolist()
+            response["dt_labels"] = dt_anno["label_preds"].detach().cpu().numpy().tolist()
+            response["dt_scores"] = dt_anno["scores"].detach().cpu().numpy().tolist()
+
     # response["num_features"] = sensor_data["lidar"]["points"].shape[1]
     response["num_features"] = 3
     points = sensor_data["lidar"]["points"][:, :3]
