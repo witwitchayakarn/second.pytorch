@@ -286,6 +286,7 @@ def train(config_path,
     total_step = train_cfg.steps
     t = time.time()
     steps_per_eval = train_cfg.steps_per_eval
+    save_checkpoints_secs = train_cfg.save_checkpoints_secs
     clear_metrics_every_epoch = train_cfg.clear_metrics_every_epoch
 
     amp_optimizer.zero_grad()
@@ -396,7 +397,8 @@ def train(config_path,
                                 // eval_input_cfg.batch_size)
                     for example in iter(eval_dataloader):
                         example = example_convert_to_torch(example, float_dtype)
-                        detections += net(example)
+                        with torch.no_grad():
+                            detections += net(example)
                         prog_bar.print_bar()
 
                     sec_per_ex = len(eval_dataset) / (time.time() - t)
@@ -412,6 +414,11 @@ def train(config_path,
                     with open(result_path_step / "result.pkl", 'wb') as f:
                         pickle.dump(detections, f)
                     net.train()
+
+                if global_step % save_checkpoints_secs == 0:
+                    torchplus.train.save_models(model_dir, [net, amp_optimizer],
+                                                net.get_global_step())
+
                 step += 1
                 if step >= total_step:
                     break
