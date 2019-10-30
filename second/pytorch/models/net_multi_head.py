@@ -192,7 +192,7 @@ class VoxelNetLyftMultiHead(VoxelNet):
 
         self.large_head = DefaultHead(
             num_filters=np.sum(self.rpn._num_upsample_filters),
-            num_class=len(self.large_classes),
+            num_class=self._num_class,
             num_anchor_per_loc=large_num_anchor_loc,
             encode_background_as_zeros=self._encode_background_as_zeros,
             use_direction_classifier=self._use_direction_classifier,
@@ -201,7 +201,7 @@ class VoxelNetLyftMultiHead(VoxelNet):
         )
         self.small_head = SmallObjectHead(
             num_filters=self.rpn._num_filters[0],
-            num_class=len(self.small_classes),
+            num_class=self._num_class,
             num_anchor_per_loc=small_num_anchor_loc,
             encode_background_as_zeros=self._encode_background_as_zeros,
             use_direction_classifier=self._use_direction_classifier,
