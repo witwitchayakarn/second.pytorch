@@ -174,3 +174,71 @@ class VoxelNetNuscenesMultiHead(VoxelNet):
         if self._use_direction_classifier:
             res["dir_cls_preds"] = torch.cat([large["dir_cls_preds"], small["dir_cls_preds"]], dim=1)
         return res
+
+
+@register_voxelnet
+class VoxelNetLyftMultiHead(VoxelNet):
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        assert self._num_class == 9
+        assert isinstance(self.rpn, rpn.RPNNoHead)
+
+        self.large_classes = ["truck", "bus", "emergency_vehicle", "car", "other_vehicle"]
+        self.small_classes = ["motorcycle", "bicycle", "pedestrian", "animal"]
+        assert len(self.large_classes) + len(self.small_classes) == self._num_class
+
+        large_num_anchor_loc = sum([self.target_assigner.num_anchors_per_location_class(c) for c in self.large_classes])
+        small_num_anchor_loc = sum([self.target_assigner.num_anchors_per_location_class(c) for c in self.small_classes])
+
+        self.large_head = DefaultHead(
+            num_filters=np.sum(self.rpn._num_upsample_filters),
+            num_class=len(self.large_classes),
+            num_anchor_per_loc=large_num_anchor_loc,
+            encode_background_as_zeros=self._encode_background_as_zeros,
+            use_direction_classifier=self._use_direction_classifier,
+            box_code_size=self._box_coder.code_size,
+            num_direction_bins=self._num_direction_bins,
+        )
+        self.small_head = SmallObjectHead(
+            num_filters=self.rpn._num_filters[0],
+            num_class=len(self.small_classes),
+            num_anchor_per_loc=small_num_anchor_loc,
+            encode_background_as_zeros=self._encode_background_as_zeros,
+            use_direction_classifier=self._use_direction_classifier,
+            box_code_size=self._box_coder.code_size,
+            num_direction_bins=self._num_direction_bins,
+        )
+
+    def network_forward(self, voxels, num_points, coors, batch_size):
+        self.start_timer("voxel_feature_extractor")
+        voxel_features = self.voxel_feature_extractor(voxels,
+                                                      num_points,
+                                                      coors)
+        self.end_timer("voxel_feature_extractor")
+
+        self.start_timer("middle forward")
+        spatial_features = self.middle_feature_extractor(voxel_features,
+                                                         coors,
+                                                         batch_size)
+        self.end_timer("middle forward")
+
+        self.start_timer("rpn forward")
+        rpn_out = self.rpn(spatial_features)
+
+        r1 = rpn_out["stage0"]
+        _, _, H, W = r1.shape
+        cropsize40x40 = np.round(H * 0.1).astype(np.int64)
+        r1 = r1[:, :, cropsize40x40:-cropsize40x40, cropsize40x40:-cropsize40x40]
+
+        large = self.large_head(rpn_out["out"])
+        small = self.small_head(r1)
+        self.end_timer("rpn forward")
+
+        # concated preds MUST match order in class_settings in config.
+        res = {
+            "box_preds": torch.cat([large["box_preds"], small["box_preds"]], dim=1),
+            "cls_preds": torch.cat([large["cls_preds"], small["cls_preds"]], dim=1),
+        }
+        if self._use_direction_classifier:
+            res["dir_cls_preds"] = torch.cat([large["dir_cls_preds"], small["dir_cls_preds"]], dim=1)
+        return res
