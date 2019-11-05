@@ -6,7 +6,6 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 import subprocess
-from multiprocessing import Pool
 
 import fire
 import numpy as np
@@ -17,6 +16,7 @@ from second.core import box_np_ops
 from second.core import preprocess as prep
 from second.data import kitti_common as kitti
 from second.data.dataset import Dataset, register_dataset
+from second.data.lyft_eval import get_average_precisions
 from second.utils.eval import get_coco_eval_result, get_official_eval_result
 from second.utils.progress_bar import progress_bar_iter as prog_bar
 from second.utils.timer import simple_timer
@@ -184,10 +184,10 @@ class LyftDataset(Dataset):
             return None
 
         iou_threshold = 0.5
-        average_precisions = _get_average_precisions(gt_annos,
-                                                     predictions,
-                                                     self._class_names,
-                                                     iou_threshold)
+        average_precisions = get_average_precisions(gt_annos,
+                                                    predictions,
+                                                    self._class_names,
+                                                    iou_threshold)
 
         result = f"Lyft Evaluation\n"
         detail = {}
@@ -275,39 +275,6 @@ def _lidar_nusc_box_to_global(info, boxes):
         box_list.append(box)
 
     return box_list
-
-
-def _get_average_precisions(gt: list,
-                            predictions: list,
-                            class_names: list,
-                            iou_threshold: float) -> np.array:
-    assert 0 <= iou_threshold <= 1
-
-    from lyft_dataset_sdk.eval.detection.mAP_evaluation import group_by_key
-    gt_by_class_name = group_by_key(gt, "name")
-    pred_by_class_name = group_by_key(predictions, "name")
-
-    pool = Pool(8)
-    pool_inputs = []
-    for name in class_names:
-        if name in gt_by_class_name and name in pred_by_class_name:
-            pool_inputs.append((gt_by_class_name[name],
-                                pred_by_class_name[name],
-                                iou_threshold,
-                                name))
-    pool_results = pool.starmap(_recall_precision, pool_inputs)
-
-    average_precisions = np.zeros(len(class_names))
-    for class_name, average_precision in pool_results:
-        average_precisions[class_names.index(class_name)] = average_precision
-
-    return average_precisions
-
-
-def _recall_precision(gt, pred, th, class_name):
-    from lyft_dataset_sdk.eval.detection.mAP_evaluation import recall_precision
-    recalls, precisions, average_precision = recall_precision(gt, pred, th)
-    return class_name, average_precision
 
 
 def _fill_trainval_infos(lyft_ds,
