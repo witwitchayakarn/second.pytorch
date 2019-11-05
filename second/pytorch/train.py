@@ -380,6 +380,10 @@ def train(config_path,
                 if global_step % steps_per_eval == 0:
                     torchplus.train.save_models(model_dir, [net, amp_optimizer],
                                                 net.get_global_step())
+
+                    torch.backends.cudnn.enabled = False
+                    print("Disabled cudnn!")
+
                     net.eval()
                     result_path_step = result_path / f"step_{net.get_global_step()}"
                     result_path_step.mkdir(parents=True, exist_ok=True)
@@ -414,6 +418,9 @@ def train(config_path,
                     with open(result_path_step / "result.pkl", 'wb') as f:
                         pickle.dump(detections, f)
                     net.train()
+
+                    torch.backends.cudnn.enabled = True
+                    print("Enabled cudnn!")
 
                 if global_step % save_checkpoints_secs == 0:
                     torchplus.train.save_models(model_dir, [net, amp_optimizer],
@@ -506,6 +513,9 @@ def evaluate(config_path,
     else:
         float_dtype = torch.float32
 
+    torch.backends.cudnn.enabled = False
+    print("Disabled cudnn!")
+
     net.eval()
     result_path_step = result_path / f"step_{net.get_global_step()}"
     result_path_step.mkdir(parents=True, exist_ok=True)
@@ -550,6 +560,9 @@ def evaluate(config_path,
         for k, v in result_dict["results"].items():
             print("Evaluation {}".format(k))
             print(v)
+
+    torch.backends.cudnn.enabled = True
+    print("Enabled cudnn!")
 
 def helper_tune_target_assigner(config_path, target_rate=None, update_freq=200, update_delta=0.01, num_tune_epoch=5):
     """get information of target assign to tune thresholds in anchor generator.
